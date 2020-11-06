@@ -64,7 +64,7 @@ float strtof_u(const char* restrict str, char** restrict end) {
 #else
 	locale_t l = "C";
 #endif
-	float res = strtof_l(str, end, l);
+	float res = strtof(str, end);
 #if HAVE_LOCALE
 	freelocale(l);
 #endif

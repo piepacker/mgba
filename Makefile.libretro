@@ -381,7 +381,8 @@ else ifeq ($(platform), genode)
 # emscripten
 else ifeq ($(platform), emscripten)
    TARGET := $(TARGET_NAME)_libretro_$(platform).bc
-   DEFINES += -std=gnu99 -DHAVE_LOCALE
+   HAVE_VFS_FD = 0
+   DEFINES += -std=gnu99 -DHAVE_LOCALE -DHAVE_STRTOF_L
 
 # GCW0
 else ifeq ($(platform), gcw0)
