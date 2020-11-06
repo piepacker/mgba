@@ -1,0 +1,139 @@
+name: CD
+
+on:
+  release:
+    types: [created]
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build_linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - run: make -f Makefile.libretro -j4
+
+      - name: ZIP Release
+        uses: papeloto/action-zip@v1
+        with:
+          files: mgba_libretro.so
+          dest: mgba_libretro.so.zip
+
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.2.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: mgba_libretro.so.zip
+          asset_name: mgba-Linux-x86_64.zip
+          asset_content_type: application/zip
+
+  build_linux_armv7_neon:
+    runs-on: ubuntu-latest
+    container: dockcross/linux-armv7
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - run: make -C libretro platform=unix-armv7-neon-hardfloat -j4
+
+      - name: ZIP Release
+        uses: papeloto/action-zip@v1
+        with:
+          files: mgba_libretro.so
+          dest: mgba_libretro.so.zip
+
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.2.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: mgba_libretro.so.zip
+          asset_name: mgba-Linux-arm.zip
+          asset_content_type: application/zip
+
+  build_osx:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - run: make -f Makefile.libretro -j4
+
+      - name: ZIP Release
+        uses: papeloto/action-zip@v1
+        with:
+          files: mgba_libretro.dylib
+          dest: mgba_libretro.dylib.zip
+
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.2.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: mgba_libretro.dylib.zip
+          asset_name: mgba-OSX-x86_64.zip
+          asset_content_type: application/zip
+
+  build_windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: true
+
+      - run: CC=gcc make -f Makefile.libretro -j4
+
+      - name: ZIP Release
+        uses: papeloto/action-zip@v1
+        with:
+          files: mgba_libretro.dll
+          dest: mgba_libretro.dll.zip
+
+      - name: Get release
+        id: get_release
+        uses: bruceadams/get-release@v1.2.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: mgba_libretro.dll.zip
+          asset_name: mgba-Windows-x86_64.zip
+          asset_content_type: application/zip
