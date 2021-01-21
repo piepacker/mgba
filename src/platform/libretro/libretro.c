@@ -2030,12 +2030,17 @@ size_t retro_get_memory_size(unsigned id) {
 	if (id == RETRO_MEMORY_SAVE_RAM) {
 #ifdef M_CORE_GBA
 		if (core->platform(core) == PLATFORM_GBA) {
+			// piepacker: keep a constant size for savefile
+#if 1
+			return SIZE_CART_FLASH1M;
+#else
 			switch (((struct GBA*) core->board)->memory.savedata.type) {
 			case SAVEDATA_AUTODETECT:
 				return SIZE_CART_FLASH1M;
 			default:
 				return GBASavedataSize(&((struct GBA*) core->board)->memory.savedata);
 			}
+#endif
 		}
 #endif
 #ifdef M_CORE_GB
