@@ -20,6 +20,7 @@
 #include <mgba-util/gui/file-select.h>
 #include <mgba-util/gui/font.h>
 #include <mgba-util/gui/menu.h>
+#include <mgba-util/math.h>
 #include <mgba-util/memory.h>
 
 #include <mgba-util/platform/3ds/3ds-vfs.h>
@@ -94,7 +95,7 @@ static int activeOutputTexture = 0;
 static ndspWaveBuf dspBuffer[DSP_BUFFERS];
 static int bufferId = 0;
 static bool frameLimiter = true;
-static u64 tickCounter;
+static u32 frameCounter;
 
 static C3D_RenderTarget* topScreen[2];
 static C3D_RenderTarget* bottomScreen[2];
@@ -106,7 +107,6 @@ static C3D_Tex upscaleBufferTex;
 static bool interframeBlending = false;
 static bool sgbCrop = false;
 
-static aptHookCookie cookie;
 static bool core2;
 
 static bool _initGpu(void) {
@@ -114,8 +114,13 @@ static bool _initGpu(void) {
 		return false;
 	}
 
-	topScreen[0] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGB8, 0);
-	topScreen[1] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGB8, 0);
+	if (gfxIsWide()) {
+		topScreen[0] = C3D_RenderTargetCreate(240, 800, GPU_RB_RGB8, 0);
+		topScreen[1] = C3D_RenderTargetCreate(240, 800, GPU_RB_RGB8, 0);
+	} else {
+		topScreen[0] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGB8, 0);
+		topScreen[1] = C3D_RenderTargetCreate(240, 400, GPU_RB_RGB8, 0);
+	}
 	bottomScreen[0] = C3D_RenderTargetCreate(240, 320, GPU_RB_RGB8, 0);
 	bottomScreen[1] = C3D_RenderTargetCreate(240, 320, GPU_RB_RGB8, 0);
 	if (!topScreen[0] || !topScreen[1] || !bottomScreen[0] || !bottomScreen[1]) {
@@ -182,18 +187,7 @@ static void _cleanup(void) {
 	camExit();
 	ndspExit();
 	ptmuExit();
-}
-
-static void _aptHook(APT_HookType hook, void* user) {
-	UNUSED(user);
-	switch (hook) {
-	case APTHOOK_ONEXIT:
-		_cleanup();
-		exit(0);
-		break;
-	default:
-		break;
-	}
+	mcuHwcExit();
 }
 
 static void _map3DSKey(struct mInputMap* map, int ctrKey, enum GBAKey key) {
@@ -207,11 +201,17 @@ static void _drawStart(void) {
 		return;
 	}
 	frameStarted = true;
+
+	int screen = screenMode >= SM_PA_TOP ? GSP_SCREEN_TOP : GSP_SCREEN_BOTTOM;
 	if (frameLimiter) {
-		if (tickCounter + 4481000 > svcGetSystemTick()) {
-			C3D_FrameSync();
+		u32 oldFrame = frameCounter;
+		frameCounter = C3D_FrameCounter(screen);
+		while (oldFrame == frameCounter) {
+			gspWaitForAnyEvent();
+			frameCounter = C3D_FrameCounter(screen);
 		}
-		tickCounter = svcGetSystemTick();
+	} else {
+		frameCounter = C3D_FrameCounter(screen);
 	}
 	C3D_FrameBegin(0);
 	ctrStartFrame();
@@ -238,14 +238,19 @@ static void _drawEnd(void) {
 static int _batteryState(void) {
 	u8 charge;
 	u8 adapter;
-	PTMU_GetBatteryLevel(&charge);
 	PTMU_GetBatteryChargeState(&adapter);
+
 	int state = 0;
+	if (R_SUCCEEDED(MCUHWC_GetBatteryLevel(&charge))) {
+		charge |= BATTERY_PERCENTAGE_VALID;
+	} else {
+		PTMU_GetBatteryLevel(&charge);
+		if (charge > 0) {
+			--charge;
+		}
+	}
 	if (adapter) {
 		state |= BATTERY_CHARGING;
-	}
-	if (charge > 0) {
-		--charge;
 	}
 	return state | charge;
 }
@@ -296,7 +301,7 @@ static void _setup(struct mGUIRunner* runner) {
 	_map3DSKey(&runner->core->inputMap, KEY_L, GBA_KEY_L);
 	_map3DSKey(&runner->core->inputMap, KEY_R, GBA_KEY_R);
 
-	outputBuffer = linearMemAlign(256 * 224 * sizeof(color_t), 0x80);
+	memset(outputBuffer, 0, 256 * 224 * sizeof(color_t));
 	runner->core->setVideoBuffer(runner->core, outputBuffer, 256);
 
 	unsigned mode;
@@ -323,7 +328,7 @@ static void _gameLoaded(struct mGUIRunner* runner) {
 	switch (runner->core->platform(runner->core)) {
 #ifdef M_CORE_GBA
 		// TODO: Move these to callbacks
-	case PLATFORM_GBA:
+	case mPLATFORM_GBA:
 		if (((struct GBA*) runner->core->board)->memory.hw.devices & HW_TILT) {
 			HIDUSER_EnableAccelerometer();
 		}
@@ -333,7 +338,7 @@ static void _gameLoaded(struct mGUIRunner* runner) {
 		break;
 #endif
 #ifdef M_CORE_GB
-	case PLATFORM_GB:
+	case mPLATFORM_GB:
 		if (((struct GB*) runner->core->board)->memory.mbcType == GB_MBC7) {
 			HIDUSER_EnableAccelerometer();
 		}
@@ -344,7 +349,7 @@ static void _gameLoaded(struct mGUIRunner* runner) {
 	}
 	osSetSpeedupEnable(true);
 
-	double ratio = GBAAudioCalculateRatio(1, 59.8260982880808, 1);
+	double ratio = GBAAudioCalculateRatio(1, 268111856.f / 4481136.f, 1);
 	blip_set_rates(runner->core->getAudioChannel(runner->core, 0), runner->core->frequency(runner->core), 32768 * ratio);
 	blip_set_rates(runner->core->getAudioChannel(runner->core, 1), runner->core->frequency(runner->core), 32768 * ratio);
 	if (hasSound != NO_SOUND) {
@@ -407,7 +412,7 @@ static void _gameUnloaded(struct mGUIRunner* runner) {
 	switch (runner->core->platform(runner->core)) {
 #ifdef M_CORE_GBA
 		// TODO: Move these to callbacks
-	case PLATFORM_GBA:
+	case mPLATFORM_GBA:
 		if (((struct GBA*) runner->core->board)->memory.hw.devices & HW_TILT) {
 			HIDUSER_DisableAccelerometer();
 		}
@@ -417,7 +422,7 @@ static void _gameUnloaded(struct mGUIRunner* runner) {
 		break;
 #endif
 #ifdef M_CORE_GB
-	case PLATFORM_GB:
+	case mPLATFORM_GB:
 		if (((struct GB*) runner->core->board)->memory.mbcType == GB_MBC7) {
 			HIDUSER_DisableAccelerometer();
 		}
@@ -470,6 +475,7 @@ static u32 _setupTex(int out, bool faded) {
 
 static void _drawTex(struct mCore* core, bool faded, bool both) {
 	unsigned screen_w, screen_h;
+	bool isWide = screenMode >= SM_PA_TOP && gfxIsWide();
 	switch (screenMode) {
 	case SM_PA_BOTTOM:
 		C3D_FrameDrawOn(bottomScreen[doubleBuffer]);
@@ -478,7 +484,7 @@ static void _drawTex(struct mCore* core, bool faded, bool both) {
 		break;
 	case SM_PA_TOP:
 		C3D_FrameDrawOn(topScreen[doubleBuffer]);
-		screen_w = 400;
+		screen_w = isWide ? 800 : 400;
 		screen_h = 240;
 		break;
 	default:
@@ -487,6 +493,7 @@ static void _drawTex(struct mCore* core, bool faded, bool both) {
 		screen_h = 512;
 		break;
 	}
+	int wide = isWide ? 2 : 1;
 
 	unsigned corew, coreh;
 	core->desiredVideoDimensions(core, &corew, &coreh);
@@ -497,24 +504,16 @@ static void _drawTex(struct mCore* core, bool faded, bool both) {
 		w = GB_VIDEO_HORIZONTAL_PIXELS;
 		h = GB_VIDEO_VERTICAL_PIXELS;
 	}
-	int innerw = w;
-	int innerh = h;
-	// Get greatest common divisor
-	while (w != 0) {
-		int temp = h % w;
-		h = w;
-		w = temp;
-	}
-	int gcd = h;
-	unsigned aspectw = innerw / gcd;
-	unsigned aspecth = innerh / gcd;
+	int aspectw = w;
+	int aspecth = h;
+	int gcd = reduceFraction(&aspecth, &aspectw);
 	int x = 0;
 	int y = 0;
 
 	switch (screenMode) {
 	case SM_PA_TOP:
 	case SM_PA_BOTTOM:
-		w = corew;
+		w = corew * wide;
 		h = coreh;
 		x = (screen_w - w) / 2;
 		y = (screen_h - h) / 2;
@@ -544,8 +543,8 @@ static void _drawTex(struct mCore* core, bool faded, bool both) {
 	}
 	ctrFlushBatch();
 
-	innerw = corew;
-	innerh = coreh;
+	int innerw = corew;
+	int innerh = coreh;
 	corew = w;
 	coreh = h;
 	screen_h = 240;
@@ -554,7 +553,7 @@ static void _drawTex(struct mCore* core, bool faded, bool both) {
 		screen_w = 320;
 	} else {
 		C3D_FrameDrawOn(topScreen[doubleBuffer]);
-		screen_w = 400;
+		screen_w = isWide ? 800 : 400;
 	}
 	ctrSetViewportSize(screen_w, screen_h, true);
 
@@ -566,6 +565,7 @@ static void _drawTex(struct mCore* core, bool faded, bool both) {
 	case SM_AF_BOTTOM:
 		afw = screen_w / (float) aspectw;
 		afh = screen_h / (float) aspecth;
+		innerw *= wide;
 		if (afw * aspecth > screen_h) {
 			w = innerw * afh / gcd;
 			h = innerh * afh / gcd;
@@ -658,7 +658,6 @@ static void _setFrameLimiter(struct mGUIRunner* runner, bool limit) {
 		return;
 	}
 	frameLimiter = limit;
-	tickCounter = svcGetSystemTick();
 }
 
 static bool _running(struct mGUIRunner* runner) {
@@ -798,6 +797,22 @@ static void _postAudioBuffer(struct mAVStream* stream, blip_t* left, blip_t* rig
 	}
 }
 
+static enum GUIKeyboardStatus _keyboardRun(struct GUIKeyboardParams* keyboard) {
+	SwkbdState swkbd;
+	swkbdInit(&swkbd, SWKBD_TYPE_NORMAL, 2, keyboard->maxLen);
+	swkbdSetInitialText(&swkbd, keyboard->result);
+	if (keyboard->multiline) {
+		swkbdSetFeatures(&swkbd, SWKBD_MULTILINE);
+	}
+
+	SwkbdButton button = swkbdInputText(&swkbd,  keyboard->result, sizeof( keyboard->result));
+	if (button == SWKBD_BUTTON_CONFIRM) {
+		return GUI_KEYBOARD_DONE;
+	} else {
+		return GUI_KEYBOARD_CANCEL;
+	}
+}
+
 THREAD_ENTRY _core2Test(void* context) {
 	UNUSED(context);
 }
@@ -820,9 +835,8 @@ int main() {
 	camera.bufferSize = 0;
 	camera.cam = SELECT_IN1;
 
-	aptHook(&cookie, _aptHook, 0);
-
 	ptmuInit();
+	mcuHwcInit();
 	camInit();
 
 	hasSound = NO_SOUND;
@@ -845,6 +859,14 @@ int main() {
 	}
 
 	gfxInit(GSP_BGR8_OES, GSP_BGR8_OES, true);
+
+	u8 model = 0;
+	cfguInit();
+	CFGU_GetSystemModel(&model);
+	if (model != 3 /* o2DS */) {
+		gfxSetWide(true);
+	}
+	cfguExit();
 
 	if (!_initGpu()) {
 		outputTexture[0].data = 0;
@@ -878,6 +900,7 @@ int main() {
 		_cleanup();
 		return 1;
 	}
+	outputBuffer = linearMemAlign(256 * 224 * sizeof(color_t), 0x80);
 
 	struct mGUIRunner runner = {
 		.params = {
@@ -887,6 +910,7 @@ int main() {
 			_pollInput, _pollCursor,
 			_batteryState,
 			_guiPrepare, _guiFinish,
+			_keyboardRun,
 		},
 		.keySources = (struct GUIInputKeys[]) {
 			{
@@ -929,7 +953,7 @@ int main() {
 		.configExtra = (struct GUIMenuItem[]) {
 			{
 				.title = "Screen mode",
-				.data = "screenMode",
+				.data = GUI_V_S("screenMode"),
 				.submenu = 0,
 				.state = SM_PA_TOP,
 				.validStates = (const char*[]) {
@@ -944,7 +968,7 @@ int main() {
 			},
 			{
 				.title = "Filtering",
-				.data = "filterMode",
+				.data = GUI_V_S("filterMode"),
 				.submenu = 0,
 				.state = FM_LINEAR_2x,
 				.validStates = (const char*[]) {
@@ -956,7 +980,7 @@ int main() {
 			},
 			{
 				.title = "Screen darkening",
-				.data = "darkenMode",
+				.data = GUI_V_S("darkenMode"),
 				.submenu = 0,
 				.state = DM_NATIVE,
 				.validStates = (const char*[]) {
@@ -969,7 +993,7 @@ int main() {
 			},
 			{
 				.title = "Camera",
-				.data = "camera",
+				.data = GUI_V_S("camera"),
 				.submenu = 0,
 				.state = 1,
 				.validStates = (const char*[]) {

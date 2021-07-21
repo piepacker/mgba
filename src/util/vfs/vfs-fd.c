@@ -42,7 +42,7 @@ static void* _vfdMap(struct VFile* vf, size_t size, int flags);
 static void _vfdUnmap(struct VFile* vf, void* memory, size_t size);
 static void _vfdTruncate(struct VFile* vf, size_t size);
 static ssize_t _vfdSize(struct VFile* vf);
-static bool _vfdSync(struct VFile* vf, const void* buffer, size_t size);
+static bool _vfdSync(struct VFile* vf, void* buffer, size_t size);
 
 struct VFile* VFileOpenFD(const char* path, int flags) {
 	if (!path) {
@@ -137,6 +137,7 @@ static void* _vfdMap(struct VFile* vf, size_t size, int flags) {
 
 static void _vfdUnmap(struct VFile* vf, void* memory, size_t size) {
 	UNUSED(vf);
+	msync(memory, size, MS_SYNC);
 	munmap(memory, size);
 }
 #else
@@ -166,8 +167,9 @@ static void* _vfdMap(struct VFile* vf, size_t size, int flags) {
 
 static void _vfdUnmap(struct VFile* vf, void* memory, size_t size) {
 	UNUSED(size);
-	struct VFileFD* vfd = (struct VFileFD*) vf;
 	size_t i;
+	struct VFileFD* vfd = (struct VFileFD*) vf;
+	FlushViewOfFile(memory, size);
 	for (i = 0; i < HandleMappingListSize(&vfd->handles); ++i) {
 		if (HandleMappingListGetPointer(&vfd->handles, i)->mapping == memory) {
 			UnmapViewOfFile(memory);
@@ -193,18 +195,18 @@ static ssize_t _vfdSize(struct VFile* vf) {
 	return stat.st_size;
 }
 
-static bool _vfdSync(struct VFile* vf, const void* buffer, size_t size) {
+static bool _vfdSync(struct VFile* vf, void* buffer, size_t size) {
 	UNUSED(buffer);
 	UNUSED(size);
 	struct VFileFD* vfd = (struct VFileFD*) vf;
 #ifndef _WIN32
-#if defined(__HAIKU__) || defined(ANDROID)
+#if defined(__HAIKU__) || defined(ANDROID) || defined(EMSCRIPTEN)
 	futimens(vfd->fd, NULL);
 #else
 	futimes(vfd->fd, NULL);
 #endif
 	if (buffer && size) {
-		return msync(buffer, size, MS_SYNC) == 0;
+		return msync(buffer, size, MS_ASYNC) == 0;
 	}
 	return fsync(vfd->fd) == 0;
 #else
@@ -214,6 +216,9 @@ static bool _vfdSync(struct VFile* vf, const void* buffer, size_t size) {
 	GetSystemTime(&st);
 	SystemTimeToFileTime(&st, &ft);
 	SetFileTime(h, NULL, &ft, &ft);
+	if (buffer && size) {
+		return FlushViewOfFile(buffer, size);
+	}
 	return FlushFileBuffers(h);
 #endif
 }

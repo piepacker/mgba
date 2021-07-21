@@ -238,6 +238,17 @@ struct retro_core_option_definition option_defs_us[] = {
       },
       "OFF"
    },
+   {
+      "mgba_gb_colors",
+      "Set default Game Boy palette",
+      "Selects which palette is used for Game Boy games that are not Game Boy Color or Super Game Boy compatible, or if the model is forced to Game Boy.",
+      {
+         // This list is populated at runtime
+         { "Grayscale", NULL },
+         { NULL, NULL },
+      },
+      "Grayscale"
+   },
    { NULL, NULL, NULL, {{0}}, NULL },
 };
 
@@ -252,7 +263,7 @@ struct retro_core_option_definition *option_defs_intl[RETRO_LANGUAGE_LAST] = {
    option_defs_us, /* RETRO_LANGUAGE_ENGLISH */
    NULL,           /* RETRO_LANGUAGE_JAPANESE */
    NULL,           /* RETRO_LANGUAGE_FRENCH */
-   NULL,           /* RETRO_LANGUAGE_SPANISH */
+   option_defs_es, /* RETRO_LANGUAGE_SPANISH */
    NULL,           /* RETRO_LANGUAGE_GERMAN */
    option_defs_it, /* RETRO_LANGUAGE_ITALIAN */
    NULL,           /* RETRO_LANGUAGE_DUTCH */
